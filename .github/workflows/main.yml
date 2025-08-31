@@ -1,0 +1,62 @@
+name: Ubuntu 22.04 VM (Root Ready)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-vm:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Install QEMU & cloud-utils
+      run: |
+        sudo apt update
+        sudo apt install -y qemu-kvm qemu-utils cloud-utils genisoimage libvirt-daemon-system sshpass
+
+    - name: Download Ubuntu 22.04 Cloud Image
+      run: |
+        wget https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img -O ubuntu-22.qcow2
+        qemu-img resize ubuntu-22.qcow2 32G
+
+    - name: Create Cloud-Init Config
+      run: |
+        cat > user-data <<EOF
+        #cloud-config
+        users:
+          - name: root
+            passwd: $(openssl passwd -6 mypassword123)
+            lock_passwd: false
+            shell: /bin/bash
+            sudo: ALL=(ALL) NOPASSWD:ALL
+        ssh_pwauth: true
+        disable_root: false
+        chpasswd:
+          expire: false
+        package_update: true
+        package_upgrade: true
+        runcmd:
+          - apt update && apt upgrade -y
+        EOF
+
+        cloud-localds seed.img user-data
+
+    - name: Run Ubuntu 22.04 VM
+      run: |
+        nohup qemu-system-x86_64 \
+          -m 16384 \
+          -smp 4 \
+          -hda ubuntu-22.qcow2 \
+          -cdrom seed.img \
+          -net nic -net user,hostfwd=tcp::2222-:22 \
+          -enable-kvm \
+          -boot c > vm.log 2>&1 &
+
+        sleep 90
+
+    - name: Test SSH Connection to VM
+      run: |
+        sshpass -p "mypassword123" ssh -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1 "echo '✅ Connected as root'; uname -a; free -h; df -h /"
+        
