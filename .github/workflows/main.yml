@@ -1,0 +1,58 @@
+name: VPS VM QEMU Ubuntu with Tmate
+
+on:
+  workflow_dispatch: # bisa dijalankan manual
+
+jobs:
+  build-vm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v3
+
+      - name: Install Dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y qemu-system-x86 qemu-utils cloud-image-utils wget openssh-client
+
+      - name: Download Ubuntu Cloud Image
+        run: |
+          wget https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img -O ubuntu.img
+          qemu-img resize ubuntu.img 8G
+
+      - name: Generate Cloud-init Config
+        run: |
+          cat > user-data <<EOF
+          #cloud-config
+          hostname: ptero-vm
+          manage_etc_hosts: true
+          ssh_pwauth: true
+          users:
+            - name: root
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              groups: users, admin
+              home: /root
+              shell: /bin/bash
+              lock_passwd: false
+              passwd: $(openssl passwd -6 '123456')
+          chpasswd:
+            expire: false
+          EOF
+          cloud-localds seed.iso user-data
+
+      - name: Start QEMU VM
+        run: |
+          nohup qemu-system-x86_64 \
+            -enable-kvm \
+            -m 2048 \
+            -smp 1 \
+            -drive file=ubuntu.img,format=qcow2 \
+            -drive file=seed.iso,format=raw \
+            -net nic -net user \
+            -nographic > vm.log 2>&1 &
+
+      - name: Setup Tmate Session
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: false
+          
