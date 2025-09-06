@@ -9,28 +9,25 @@ jobs:
     timeout-minutes: 360
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v3
-
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y qemu-kvm qemu-utils cloud-image-utils genisoimage \
-          curl unzip openssh-client net-tools netcat-openbsd tmate
+        sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils genisoimage curl wget tmate
 
     - name: Prepare VM image
       run: |
-        mkdir -p /opt/qemu /cloud-init /data
+        BASE=$HOME/vmwork
+        mkdir -p $BASE/qemu $BASE/cloud-init $BASE/data
 
         # Download Ubuntu 22.04 cloud image
         curl -L https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img \
-          -o /opt/qemu/ubuntu.img
+          -o $BASE/qemu/ubuntu.img
 
         # Write meta-data
-        echo "instance-id: ubuntu-vm\nlocal-hostname: ubuntu-vm" > /cloud-init/meta-data
+        echo "instance-id: ubuntu-vm\nlocal-hostname: ubuntu-vm" > $BASE/cloud-init/meta-data
 
-        # Write user-data
-        cat > /cloud-init/user-data <<EOF
+        # Write user-data (enable root login, password = root, auto-start sshx)
+        cat > $BASE/cloud-init/user-data <<EOF
         #cloud-config
         preserve_hostname: false
         hostname: ubuntu-vm
@@ -54,26 +51,28 @@ jobs:
         EOF
 
         # Create cloud-init ISO
-        genisoimage -output /opt/qemu/seed.iso -volid cidata -joliet -rock \
-          /cloud-init/user-data /cloud-init/meta-data
+        genisoimage -output $BASE/qemu/seed.iso -volid cidata -joliet -rock \
+          $BASE/cloud-init/user-data $BASE/cloud-init/meta-data
 
         # Create VM disk (1TB)
-        qemu-img convert -f qcow2 -O raw /opt/qemu/ubuntu.img /data/vm.raw
-        qemu-img resize /data/vm.raw 1024G
+        qemu-img convert -f qcow2 -O raw $BASE/qemu/ubuntu.img $BASE/data/vm.raw
+        qemu-img resize $BASE/data/vm.raw 1024G
 
     - name: Start VM
       run: |
-        qemu-system-x86_64 \
+        BASE=$HOME/vmwork
+        nohup qemu-system-x86_64 \
           -enable-kvm \
           -cpu host \
           -smp 32 \
           -m 262144 \
-          -drive file=/data/vm.raw,format=raw,if=virtio \
-          -drive file=/opt/qemu/seed.iso,format=raw,if=virtio \
+          -drive file=$BASE/data/vm.raw,format=raw,if=virtio \
+          -drive file=$BASE/qemu/seed.iso,format=raw,if=virtio \
           -netdev user,id=net0 -device virtio-net,netdev=net0 \
-          -nographic &
+          -nographic > $BASE/vm.log 2>&1 &
 
-        sleep 30
+        sleep 60
+        echo "✅ VM started"
 
     - name: Start tmate session
       uses: mxschmitt/action-tmate@v3
