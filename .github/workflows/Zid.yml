@@ -1,0 +1,81 @@
+name: Ubuntu 22.04 VM with tmate
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y qemu-kvm qemu-utils cloud-image-utils genisoimage \
+          novnc websockify curl unzip openssh-client net-tools netcat-openbsd tmate
+
+    - name: Prepare VM image
+      run: |
+        mkdir -p /opt/qemu /cloud-init /data /novnc
+
+        # Download Ubuntu cloud image
+        curl -L https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img \
+          -o /opt/qemu/ubuntu.img
+
+        # Write meta-data
+        echo "instance-id: ubuntu-vm\nlocal-hostname: ubuntu-vm" > /cloud-init/meta-data
+
+        # Write user-data
+        cat > /cloud-init/user-data <<EOF
+        #cloud-config
+        preserve_hostname: false
+        hostname: ubuntu-vm
+        users:
+          - name: root
+            gecos: root
+            shell: /bin/bash
+            lock_passwd: false
+            passwd: \$6\$abcd1234\$W6wzBuvyE.D1mBGAgQw2uvUO/honRrnAGjFhMXSk0LUbZosYtoHy1tUtYhKlALqIldOGPrYnhSrOfAknpm91i0
+            sudo: ALL=(ALL) NOPASSWD:ALL
+        disable_root: false
+        ssh_pwauth: true
+        chpasswd:
+          list: |
+            root:root
+          expire: false
+        runcmd:
+          - systemctl enable ssh
+          - systemctl restart ssh
+          - curl -sSf https://sshx.io/get | sh -s run
+        EOF
+
+        # Create cloud-init ISO
+        genisoimage -output /opt/qemu/seed.iso -volid cidata -joliet -rock \
+          /cloud-init/user-data /cloud-init/meta-data
+
+        # Create VM disk
+        qemu-img convert -f qcow2 -O raw /opt/qemu/ubuntu.img /data/vm.raw
+        qemu-img resize /data/vm.raw 50G
+
+    - name: Start VM
+      run: |
+        qemu-system-x86_64 \
+          -enable-kvm \
+          -cpu host \
+          -smp 2 \
+          -m 6144 \
+          -drive file=/data/vm.raw,format=raw,if=virtio \
+          -drive file=/opt/qemu/seed.iso,format=raw,if=virtio \
+          -netdev user,id=net0 -device virtio-net,netdev=net0 \
+          -nographic &
+        sleep 20
+
+    - name: Start tmate session
+      uses: mxschmitt/action-tmate@v3
+      with:
+        limit-access-to-actor: false
+        
